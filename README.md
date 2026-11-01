@@ -1,66 +1,65 @@
-# Spectral Smear for Open-XY
+# Spectral Smear by Veff
 
-**Status: planning only.** This repository currently contains a design brief, not an implemented or installable effect. No DSP, firmware, presets or measured hardware results are included.
+A stereo spectral send effect for Open-XY, ID `spectralsmear`. It analyzes the
+input with a real 128-point FFT and reconstructs it with a 64-sample hop and
+Hann overlap-add. Spectral memory follows bin phase between frames; neighboring
+bins diffuse into each other. This is actual spectral analysis/resynthesis.
 
-## Goal
+| Encoder | Control | Behavior |
+| --- | --- | --- |
+| E1 | Smear | Temporal spectral memory, from immediate response to a long decaying tail |
+| E2 | Spread | Diffusion into neighboring frequency bins |
+| E3 | Tone | Increasing high-frequency attenuation |
+| E4 | Level | Wet output level |
 
-Diffuse sound over time and frequency to turn sharp events into sustained, blurred textures. Intended for pads, transitions and atmospheric processing.
+Try Smear around 75% and Spread around 25% on a short chord or percussion send.
+Turn Smear and Spread to zero for the neutral, delayed signal. The stock dry
+path remains separate: the effect returns wet audio only. Smear is not a freeze;
+its maximum retention is bounded below unity. Reset discards the spectral tail.
 
-## Proposed MVP signal flow
+## Implementation and limits
 
-Stereo input → windowed spectral analysis → temporal magnitude smoothing / bounded bin spreading → phase-aware resynthesis → overlap-add wet return.
+At 44.1 kHz, bins are 344.53 Hz apart and latency is exactly 128 samples
+(2.90 ms). This deliberately coarse spectrum gives a colored smear rather than
+fine pitch separation. Stereo channels keep separate spectral histories while
+sharing packed complex transforms. Fixed-point rounding creates very small
+cross-channel residue; tests bound it below -96 dBFS. Scratch is 6,176 bytes per
+send, initialized on first process after reset. Audio processing allocates nothing.
 
-The first implementation must choose and document a fixed transform size, hop size, latency and buffer layout. Prototype the spectral path and measure its cost before committing to an FFT implementation on Blackfin. Do not substitute a conventional reverb and label it spectral processing. Freeze and more elaborate phase modes are follow-up work.
+The original FFT and tables are included here. Regenerate constants with
+`python tools/tables.py`. Internal headroom bounds the inverse transform;
+restoration and overlap-add saturate at full scale. Extreme settings can clip.
 
-## Proposed controls
+**Experimental CPU load:** the official SDK host estimate is approximately
+56,500 Blackfin instructions per block, above its 48,000 high-load threshold.
+Several active tracks/notes may cause dropouts. Packing stereo transforms reduced
+this from approximately 128,500 without reducing transform resolution. These
+are host estimates, not device measurements. Hardware sound, stability and CPU
+qualification remain pending; this revision is not catalog-qualified.
 
-| Primary | Purpose |
-|---|---|
-| Smear | Persistence across analysis frames |
-| Spread | Frequency-bin spreading |
-| Tone | Spectral emphasis / damping |
-| Level | Wet output level |
+## Build and test
 
-Keep the initial control set small. A later freeze mode should have a defined entry/exit crossfade.
+Use Open-XY SDK `7fd8fdf1757e11ab6fdca915b09f1773d7611a31` or a compatible revision.
+Adjust the SDK path below to your checkout:
 
-Control assignments are a starting design, not a published compatibility contract. Provide at least a neutral/default sound and a few useful settings when implementation begins.
+```sh
+python ../open-xy/sdk.py test --machine .
+```
 
-## Routing and resources
+Tests cover FFT bin identity, neutral broadband reconstruction, exact impulse
+latency, stereo isolation, spectral decay/diffusion, poisoned scratch, reset,
+full-scale controls and missing scratch. UBSan checks and an independent
+30,000-block randomized stereo ASan/UBSan review also passed. Effects have no
+browser preview. Native compilation needs a synth in the collection with this
+SDK revision; include the core `fm2op` machine along with this effect.
 
-A wet send is the initial routing. Use bounded SDK scratch memory, with a complete budget for input history, windows, transform workspace, spectral state and overlap-add output. Respect the SDK fixed-point constraints. Avoid concentrating an entire expensive transform into one audio block unless measured timing proves it safe.
+Follow the SDK [build guide](https://github.com/etcetc000/open-xy/blob/staging/docs/build.md)
+and [hardware profiling guide](https://github.com/etcetc000/open-xy/blob/staging/docs/profiling.md).
+Keep stock firmware and all firmware outputs outside checkouts. Install only
+when authorized. Test first at low volume, then measure worst-case CPU with the
+intended track count before relying on this effect in a performance.
 
-Target a standalone Open-XY `effect` machine. The SDK supplies the adapters; this repository owns the DSP, controls, artwork and sound tests. SDK changes, if needed, belong in separate upstream PRs.
-
-The current SDK processes stereo Q31 blocks of 64 samples at 44.1 kHz. Unbuffered state is at most 476 bytes; buffered state at most 472 bytes, with an additional reduction when using a shift row. Audio callbacks cannot allocate, block, perform I/O, log or draw. Do not assume a host estimate proves device timing.
-
-## Implementation handoff
-
-1. Start from a current SDK checkout beside this repository and read its authoring/UX instructions.
-2. Generate the official effect starter into a fresh sibling directory, then bring its scaffold into this repository while preserving this brief:
-   ```sh
-   python3 ../open-xy/sdk.py new --repository --kind effect --id spectralsmear --name "Spectral Smear" --out ../open-xy-spectral-smear-starter
-   ```
-3. Implement the smallest signal path, controls and default settings; keep firmware addresses and platform code out of the effect.
-4. Run the machine's tests with `python3 ../open-xy/sdk.py test --machine .` once the scaffold is present. Follow the generated README if its layout changes.
-5. Measure memory and worst-case device CPU, then test an explicitly authorized development build before catalog submission.
-
-No catalog entry or upstream PR is part of this planning repository. No firmware or stock content may be committed here.
-
-## Validation plan
-
-Neutral analysis/resynthesis error and latency; impulse response; overlap-add gain; sine-bin leakage; silence and DC; smoothing decay; extreme spectral spreads; reset/uninitialized-memory behavior; measured worst-case block time.
-
-Host numerical tests, native build verification, listening tests and revision-bound hardware CPU measurements are separate requirements. No browser audition support is assumed for effects.
-
-## SDK reference
-
-Planning checked against Open-XY staging revision [`64bd090`](https://github.com/etcetc000/open-xy/tree/64bd0900a08a134e274a8b8decbc8b734ca534dd) on 2026-11-01:
-
-- [Effect API and scratch buffers](https://github.com/etcetc000/open-xy/blob/64bd0900a08a134e274a8b8decbc8b734ca534dd/docs/api.md#effects)
-- [Authoring journey](https://github.com/etcetc000/open-xy/blob/64bd0900a08a134e274a8b8decbc8b734ca534dd/docs/first-machine.md)
-- [UX conventions](https://github.com/etcetc000/open-xy/blob/64bd0900a08a134e274a8b8decbc8b734ca534dd/docs/ux.md)
-- [Hardware profiling](https://github.com/etcetc000/open-xy/blob/64bd0900a08a134e274a8b8decbc8b734ca534dd/docs/profiling.md)
-
-## Next step
-
-Assign a dedicated implementation agent after the brief is reviewed. Do not start other effects or modify the SDK as part of this repository's initial implementation.
+The generated CI template is retained, inactive, at `ci/machine.yml.example`;
+move it to `.github/workflows/machine.yml` with workflow-authorized credentials
+to enable it. The original design brief is in `docs/DESIGN-BRIEF.md`.
+MIT license; see [LICENSE](LICENSE).
